@@ -1,5 +1,7 @@
+
+from multiprocessing import freeze_support
+
 import chess
-import multiprocessing
 
 PIECE_VALUES = {
     chess.PAWN: 1.0,
@@ -12,47 +14,12 @@ PIECE_VALUES = {
 
 
 class Engine:
-    def __init__(self, board):
+    def __init__(self, board: chess.Board, pool, manager):
         self.board = board
+        self.pool = pool
+        self.manager = manager
 
-    def evaluate(self):
-        if outcome := self.board.outcome():
-            if outcome.winner == chess.BLACK:
-                return -1000.0
-            if outcome.winner == chess.WHITE:
-                return 1000.0
-            if outcome.result == '1/2-1/2':
-                return 0.0
-
-        score_white = 0.0
-        score_black = 0.0
-
-        center_squares = [chess.E4, chess.D4, chess.E5, chess.D5]
-        safe_squares_white = [chess.G1, chess.H1, chess.C1, chess.B1, chess.A1]
-        safe_squares_black = [chess.G8, chess.H8, chess.C8, chess.B8, chess.A8]
-
-        for (square, piece) in self.board.piece_map().items():
-            if piece.color == chess.WHITE:
-                score_white += PIECE_VALUES[piece.piece_type]
-                if square in center_squares:
-                    score_white += 0.1 * PIECE_VALUES[piece.piece_type]
-                score_white += 0.05 * len(self.board.attacks(square))
-            else:
-                score_black += PIECE_VALUES[piece.piece_type]
-                if square in center_squares:
-                    score_black += 0.1 * PIECE_VALUES[piece.piece_type]
-                score_black += 0.05 * len(self.board.attacks(square))
-        if self.board.king(chess.WHITE) in safe_squares_white:
-            score_white += 0.5
-        if self.board.king(chess.BLACK) in safe_squares_black:
-            score_black += 0.5
-        if self.board.king(chess.WHITE) not in safe_squares_white and not self.board.has_castling_rights(chess.WHITE):
-            score_white -= 0.75
-        if self.board.king(chess.BLACK) not in safe_squares_white and not self.board.has_castling_rights(chess.BLACK):
-            score_black -= 0.75
-        return score_white - score_black
-
-    def analyze(self):
+    def analyze_concurrent(self):
         if self.board.turn == chess.WHITE:
             maximize = True
         else:
@@ -61,40 +28,118 @@ class Engine:
         best_move = None
         best_score = float('-inf') if maximize else float('inf')
 
-        for move in self.board.legal_moves:
-            self.board.push(move)
-            score = self.alpha_beta(6, float('-inf'), float('inf'), not maximize)
+        pos_map = {} #self.manager.dict()
+        depth = 5
+
+        moves = list(self.board.legal_moves)
+        tasks = [(move, depth, maximize, self.board.copy(), pos_map) for move in moves]
+
+        for args in tasks:
+            move, score  = call_analyze(args)
             if maximize and score >= best_score:
                 best_score = score
                 best_move = move
             elif not maximize and score <= best_score:
                 best_score = score
                 best_move = move
-            self.board.pop()
         return best_move, best_score
 
-    def alpha_beta(self, depth, score_white, score_black, maximize):
-        if depth == 0 or self.board.is_game_over():
-            return self.evaluate()
-        if maximize:
-            score = float('-inf')
-            for move in list(self.board.legal_moves):
-                self.board.push(move)
-                score = max(score, self.alpha_beta(depth - 1, score_white, score_black, False))
-                if score > score_black:
-                    self.board.pop()
-                    break
-                score_white = max(score_white, score)
-                self.board.pop()
-            return score
+
+def evaluate(board: chess.Board):
+    if outcome := board.outcome():
+        if outcome.winner == chess.BLACK:
+            return -1000.0
+        if outcome.winner == chess.WHITE:
+            return 1000.0
+        if outcome.result == '1/2-1/2':
+            return 0.0
+
+    score = 0.0
+
+    for (square, piece) in board.piece_map().items():
+        if piece.color == chess.WHITE:
+            score += PIECE_VALUES[piece.piece_type]
         else:
-            score = float('inf')
-            for move in list(self.board.legal_moves):
-                self.board.push(move)
-                score = min(score, self.alpha_beta(depth - 1, score_white, score_black, True))
-                if score < score_white:
-                    self.board.pop()
-                    break
-                score_black = min(score_black, score)
-                self.board.pop()
-            return score
+            score -= PIECE_VALUES[piece.piece_type]
+
+        #if piece.piece_type == chess.PAWN:
+        #    file_index = chess.square_file(square)
+        #    rank_index = chess.square_rank(square)
+        #    # Isolated Pawn Check
+        #    if not any(board.piece_at(neighbor) for neighbor in chess.SquareSet(chess.BB_FILES[file_index]) & chess.SquareSet(chess.BB_RANKS[rank_index])):
+        #        isolated_pawns += 1 if piece.color == chess.WHITE else -1
+#
+        #    # Doubled Pawn Check
+        #    if len(chess.SquareSet(board.pieces(piece.piece_type, piece.color) & chess.BB_FILES[rank_index])) > 1:
+        #        doubled_pawns +=  1 if piece.color == chess.WHITE else -1
+#
+        #    # Blocked Pawn Check
+        #    if board.piece_at(square + 8) is not None:  # Check if there's a piece in front of the pawn
+        #        blocked_pawns += 1 if piece.color == chess.WHITE else -1
+
+    #white_mobility = len(list(board.legal_moves))
+    #board.turn = chess.BLACK
+    #black_mobility = len(list(board.legal_moves))
+    #board.turn = chess.WHITE
+    ##score -= 0.5 * (doubled_pawns + blocked_pawns + isolated_pawns)
+    #score += 0.1 * (white_mobility - black_mobility)
+
+    return score
+
+
+def call_analyze(args):
+    move, depth, maximize, board, pos_map = args
+    board.push(move)
+    return move, alpha_beta(depth, float('-inf'), float('inf'), maximize, board, pos_map)
+
+
+def alpha_beta(depth, alpha, beta, maximize, board: chess.Board, pos_map):
+    # If we already have an evaluation for the position return that instead
+    if bhash := hash_board(board) in pos_map.keys():
+        return pos_map[bhash]
+
+    if depth == 0 or board.is_game_over():
+        score = evaluate(board)
+        pos_map[bhash] = score
+        return evaluate(board)
+    if maximize:
+        score = float('-inf')
+        for move in list(board.legal_moves):
+            board.push(move)
+            score = max(score, alpha_beta(depth - 1, alpha, beta, False, board, pos_map))
+            if score > beta:
+                board.pop()
+                break
+            alpha = max(alpha, score)
+            board.pop()
+        pos_map[bhash] = score
+        return score
+    else:
+        score = float('inf')
+        for move in list(board.legal_moves):
+            board.push(move)
+            score = min(score, alpha_beta(depth - 1, alpha, beta, True, board, pos_map))
+            if score < alpha:
+                board.pop()
+                break
+            beta = min(beta, score)
+            board.pop()
+        pos_map[bhash] = score
+        return score
+
+
+# Converts fen into hashmap key
+def hash_board(board: chess.Board):
+    hash = board.pawns
+    hash ^= board.rooks
+    hash ^= board.knights
+    hash ^= board.bishops
+    hash ^= board.queens
+    hash ^= board.kings
+    hash ^= board.castling_rights
+    hash ^= board.ep_square if board.ep_square else 0
+    hash ^= board.turn
+    return hash
+
+if __name__ == '__main__':
+    freeze_support()

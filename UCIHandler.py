@@ -1,4 +1,6 @@
 import asyncio
+import multiprocessing
+
 import chess
 import sys
 
@@ -6,12 +8,12 @@ from Engine import Engine  # Assuming you have an Engine class in the Engine mod
 
 
 class UCIProtocolHandler:
-    def __init__(self, inp, out):
+    def __init__(self, inp, out, pool):
         self.inp = inp
         self.out = out
         self.board = chess.Board()
         self.debug = False
-        self.engine = Engine(self.board)
+        self.engine = Engine(self.board, pool)
 
     async def get_streams(self):
         loop = asyncio.get_event_loop()
@@ -60,7 +62,7 @@ class UCIProtocolHandler:
 
     async def handle_go(self):
         self.engine.board = self.board
-        move, eval = self.engine.analyze()
+        move, eval = self.engine.analyze_concurrent()
         await self.write(f"info eval {eval}\n")
         await self.write(f"bestmove {move.uci()}\n")
 
@@ -107,5 +109,6 @@ class UCIProtocolHandler:
 
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
-    handler = UCIProtocolHandler(sys.stdin, sys.stdout)
-    loop.run_until_complete(handler.listen())
+    with  multiprocessing.Pool(10) as pool:
+        handler = UCIProtocolHandler(sys.stdin, sys.stdout, pool)
+        loop.run_until_complete(handler.listen())
