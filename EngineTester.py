@@ -1,6 +1,7 @@
 import chess
 import chess.engine
 import chess.svg
+import chess.pgn
 
 import logging
 
@@ -21,6 +22,7 @@ def main():
         #    squares=chess.SquareSet(chess.BB_DARK_SQUARES & chess.BB_FILE_B),
         #    size=350)
         print(board)
+        print(chess.pgn.Game.from_board(board))
 
 
 if __name__ == '__main__':

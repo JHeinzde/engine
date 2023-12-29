@@ -74,7 +74,7 @@ impl UciHandler {
 
     // Example method to handle the "go" command
     fn handle_go_command(&self, parts: Vec<&str>) {
-        let (bmove, score) = analyze(8, self.chess_board.clone());
+        let (bmove, score) = analyze(7, self.chess_board.clone());
 
         println!("info score {}", score);
         println!("bestmove {}", bmove.to_string())
@@ -86,7 +86,7 @@ fn main() {
 
     uci_handler.run();
 
-    //let (mov, score) = analyze(8, Board::default());
+    //let (mov, score) = analyze(7, Board::default());
     //println!("info {}", score);
     //println!("bestmove {}", mov.to_string())
 }

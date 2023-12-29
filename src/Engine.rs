@@ -1,10 +1,7 @@
-use std::collections::HashMap;
 use std::hash::Hash;
-use std::iter::Map;
 use std::ops::BitAnd;
 
-use chess::{BitBoard, Board, BoardStatus, CacheTable, ChessMove, Color, MoveGen, Piece, Square};
-use chess::BoardStatus::{Checkmate, Stalemate};
+use chess::{BitBoard, Board, CacheTable, ChessMove, Color, MoveGen, Piece, Square};
 use chess::Color::White;
 use Color::Black;
 
@@ -218,6 +215,38 @@ const WHITE_KING: [i32; 64] = [
     -50, -50, -50, -50, -50, -50, -50, -50,
 ];
 
+const BLACK_KING: [i32; 64] = [
+    // Rank 1
+    50, 50, 50, 50, 50, 50, 50, 50,
+    // Rank 2
+    10, 10, 30, 30, 30, 30, 30, 30,
+    // Rank 3
+    50, 50, 50, 50, 50, 50, 50, 50,
+    // Rank 4
+    50, 50, 50, 50, 50, 50, 50, 50,
+    // Rank 5
+    50, 50, 50, 50, 50, 50, 50, 50,
+    // Rank 6
+    50, 50, 50, 50, 50, 50, 50, 50,
+    // Rank 7
+    50, 50, 50, 50, 50, 50, 50, 50,
+    // Rank 8
+    -20, -30, -20, 30, 30, -20, -30, -20,
+];
+
+enum NodeType {
+    EXACT,
+    ALL,
+    CUT
+}
+
+struct TranspositionEntry {
+    score: i32,
+    mov: ChessMove,
+    node_type: NodeType,
+    depth: u16
+}
+
 
 fn evaluate(board: &Board) -> i32 {
     let mut score = 0i32;
@@ -230,12 +259,14 @@ fn evaluate(board: &Board) -> i32 {
     let mut white_bishops = white_pieces.bitand(board.pieces(Piece::Bishop));
     let mut white_rooks = white_pieces.bitand(board.pieces(Piece::Rook));
     let mut white_queen = white_pieces.bitand(board.pieces(Piece::Queen));
+    let mut white_king = white_pieces.bitand(board.pieces(Piece::King));
 
     let mut black_pawns = black_pieces.bitand(board.pieces(Piece::Pawn));
     let mut black_knights = black_pieces.bitand(board.pieces(Piece::Knight));
     let mut black_bishops = black_pieces.bitand(board.pieces(Piece::Bishop));
     let mut black_rooks = black_pieces.bitand(board.pieces(Piece::Rook));
     let mut black_queen = black_pieces.bitand(board.pieces(Piece::Queen));
+    let mut black_king = black_pieces.bitand(board.pieces(Piece::King));
 
     let white_pawns_count = white_pawns.popcnt() as i32;
     let white_knights_count = white_knights.popcnt() as i32;
@@ -253,65 +284,6 @@ fn evaluate(board: &Board) -> i32 {
         (white_knights_count - black_knights_count) * 290 + (white_rooks_count - black_rooks_count) * 500 +
         (white_queen_count - black_queen_count) * 900;
     
-    let mut bb_iter = 1u64;
-    
-    
-    for square in 0..64 {
-        let white_p = white_pawns.bitand(bb_iter);
-        let white_q = white_queen.bitand(bb_iter);
-        let white_k = white_knights.bitand(bb_iter);
-        let white_b = white_bishops.bitand(bb_iter);
-        let white_r = white_rooks.bitand(bb_iter);
-
-        let black_p = black_pawns.bitand(bb_iter);
-        let black_q = black_queen.bitand(bb_iter);
-        let black_k = black_knights.bitand(bb_iter);
-        let black_b = black_bishops.bitand(bb_iter);
-        let black_r = black_rooks.bitand(bb_iter);
-        
-        if white_p != 0 {
-            score += WHITE_PAWN[square];
-        }
-        
-        if white_q != 0 {
-            score += WHITE_QUEEN[square];
-        }
-        
-        if white_k != 0 {
-            score += WHITE_KNIGHT[square];
-        }
-        
-        if white_b != 0 {
-            score += WHITE_BISHOP[square];
-        }
-        
-        if white_r != 0 {
-            score += WHITE_ROOK[square];
-        }
-
-
-        if black_p != 0 {
-            score += BLACK_PAWN[square];
-        }
-
-        if black_q != 0 {
-            score += BLACK_QUEEN[square];
-        }
-
-        if black_k != 0 {
-            score += BLACK_KNIGHT[square];
-        }
-
-        if black_b != 0 {
-            score += BLACK_BISHOP[square];
-        }
-
-        if black_r != 0 {
-            score += BLACK_ROOK[square];
-        }
-
-        bb_iter << 1;
-    }
 
     score += iterate_bitboard(&mut white_pawns, |square: Square| WHITE_PAWN[square.to_index()]);
     score += iterate_bitboard(&mut black_pawns, |square: Square| BLACK_PAWN[square.to_index()]);
@@ -323,11 +295,12 @@ fn evaluate(board: &Board) -> i32 {
     score += iterate_bitboard(&mut black_rooks, |square: Square| BLACK_ROOK[square.to_index()]);
     score += iterate_bitboard(&mut white_queen, |square: Square| WHITE_QUEEN[square.to_index()]);
     score += iterate_bitboard(&mut black_queen, |square: Square| BLACK_QUEEN[square.to_index()]);
+    score += iterate_bitboard(&mut white_king, |square: Square| WHITE_KING[square.to_index()]);
+    score += iterate_bitboard(&mut black_king, |square: Square| BLACK_KING[square.to_index()]);
 
 
     return score;
 }
-
 
 #[inline]
 fn iterate_bitboard(bb: &mut BitBoard, f: fn(Square) -> i32) -> i32 {
@@ -354,13 +327,17 @@ pub fn analyze(depth: u16, board: Board) -> (ChessMove, i32) {
     let mut best_move: Option<ChessMove> = None;
 
     for mov in MoveGen::new_legal(&board) {
-        let score = alpha_beta(depth - 1, i32::MIN, i32::MAX, maximize, board.make_move_new(mov), &mut cache_table);
-        if maximize && score >= best_score {
-            best_score = score;
-            best_move = Some(mov);
-        } else if !maximize && score <= best_score {
-            best_score = score;
-            best_move = Some(mov);
+        let score = alpha_beta(depth - 1, i32::MIN, i32::MAX, !maximize, board.make_move_new(mov), &mut cache_table);
+        if maximize {
+            if score >= best_score {
+                best_score = score;
+                best_move = Some(mov)
+            }
+        } else {
+            if score <= best_score {
+                best_score = score;
+                best_move = Some(mov);
+            }
         }
     }
 
@@ -408,6 +385,7 @@ fn alpha_beta(depth: u16, mut alpha: i32, mut beta: i32, maximize: bool, board: 
         let mut score = i32::MAX;
         for mov in move_gen {
             score = score.min(alpha_beta(depth - 1, alpha, beta, true, board.make_move_new(mov), cache_table));
+            cache_table.add(board.get_hash(), score);
             if score <= alpha {
                 return alpha;
             }
