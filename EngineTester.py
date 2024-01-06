@@ -17,10 +17,6 @@ def main():
     while not board.is_game_over():
         result = engine.play(board, chess.engine.Limit(depth=4))
         board.push(result.move)
-        #svg = chess.svg.board(
-        #    board,
-        #    squares=chess.SquareSet(chess.BB_DARK_SQUARES & chess.BB_FILE_B),
-        #    size=350)
         print(board)
         print(chess.pgn.Game.from_board(board))
 

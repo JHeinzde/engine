@@ -1,9 +1,11 @@
+#![feature(iter_collect_into)]
+
 mod Engine;
 
 use std::io::{self, BufRead, Write};
-use chess::Board;
+use chess::{Board, MoveGen};
 use std::str::FromStr;
-use crate::Engine::analyze;
+use crate::Engine::{iterative_deepening};
 
 struct UciHandler {
     chess_board: Board,
@@ -74,9 +76,20 @@ impl UciHandler {
 
     // Example method to handle the "go" command
     fn handle_go_command(&self, parts: Vec<&str>) {
-        let (bmove, score) = analyze(7, self.chess_board.clone());
+        let (bmove, score, mut variation) = iterative_deepening(9, self.chess_board.clone());
+
+
+        variation.reverse();
+        let mut s_var = String::new();
+
+        for mov in variation {
+            s_var.push_str(&*mov.to_string());
+            s_var.push_str(" ")
+        }
+
 
         println!("info score {}", score);
+        println!("info variation {}", s_var);
         println!("bestmove {}", bmove.to_string())
     }
 }
@@ -86,7 +99,13 @@ fn main() {
 
     uci_handler.run();
 
-    //let (mov, score) = analyze(7, Board::default());
+    //let (mov, score, mut variation) = iterative_deepening(5, Board::default());
+    //variation.reverse();
+//
+    //for mov in variation {
+    //    println!("{}", mov.to_string())
+    //}
+//
     //println!("info {}", score);
     //println!("bestmove {}", mov.to_string())
 }
