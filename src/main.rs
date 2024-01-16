@@ -3,9 +3,8 @@
 mod Engine;
 
 use std::io::{self, BufRead, Write};
-use chess::{Board, MoveGen};
+use chess::{Board};
 use std::str::FromStr;
-use crate::Engine::{iterative_deepening};
 
 struct UciHandler {
     chess_board: Board,
@@ -61,7 +60,12 @@ impl UciHandler {
         if parts.contains(&"fen") {
             let pos_fen = parts.iter().position(|&s| s == "fen").unwrap();
             let fen = *parts.get(pos_fen + 1).unwrap();
-            self.chess_board = Board::from_str(fen).unwrap();
+            let fen = fen.to_owned() + " " + *parts.get(pos_fen + 2).unwrap();
+            let fen = fen + " " + *parts.get(pos_fen + 3).unwrap();
+            let fen = fen + " " + *parts.get(pos_fen + 4).unwrap();
+            let fen = fen + " " + *parts.get(pos_fen + 5).unwrap();
+            let fen = fen + " " + *parts.get(pos_fen + 5).unwrap();
+            self.chess_board = Board::from_str(&fen).unwrap();
         }
 
         if parts.contains(&"moves") {
@@ -76,7 +80,9 @@ impl UciHandler {
 
     // Example method to handle the "go" command
     fn handle_go_command(&self, parts: Vec<&str>) {
-        let (bmove, score, mut variation) = iterative_deepening(9, self.chess_board.clone());
+        let mut engine = Engine::Engine::new();
+        let (bmove, score, mut variation) = engine
+            .iterative_deepening(16, self.chess_board.clone());
 
 
         variation.reverse();
@@ -90,6 +96,8 @@ impl UciHandler {
 
         println!("info score {}", score);
         println!("info variation {}", s_var);
+        println!("info visited nodes {}", engine.pos_counter);
+        println!("info pruning operations {}", engine.cut_off_counter);
         println!("bestmove {}", bmove.to_string())
     }
 }
@@ -97,15 +105,15 @@ impl UciHandler {
 fn main() {
     let mut uci_handler = UciHandler::new();
 
-    uci_handler.run();
+    //uci_handler.run();
 
-    //let (mov, score, mut variation) = iterative_deepening(5, Board::default());
-    //variation.reverse();
-//
-    //for mov in variation {
-    //    println!("{}", mov.to_string())
-    //}
-//
-    //println!("info {}", score);
-    //println!("bestmove {}", mov.to_string())
+    let mut engine = Engine::Engine::new();
+
+    let (mov, score, mut variation) = engine.iterative_deepening(5, Board::default());
+    variation.reverse();
+    for mov in variation {
+        println!("{}", mov.to_string())
+    }
+    println!("info {}", score);
+    println!("bestmove {}", mov.to_string())
 }

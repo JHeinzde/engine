@@ -13,7 +13,7 @@ engine = chess.engine.SimpleEngine.popen_uci(
 
 
 def main():
-    board = chess.Board()
+    board = chess.Board("8/2R3pk/8/8/6P1/P1K5/8/8 w - - 3 73")
     while not board.is_game_over():
         result = engine.play(board, chess.engine.Limit(depth=4))
         board.push(result.move)
