@@ -1,11 +1,10 @@
-use std::hash::Hash;
-use std::ops::BitAnd;
+use std::ops::{BitAnd, Neg};
 
 use chess::{BitBoard, Board, CacheTable, ChessMove, Color, EMPTY, MoveGen, Piece, Square};
 use chess::Color::White;
 use Color::Black;
-use crate::Engine::NodeType::{ALL_NODE, CUT_NODE, PV_NODE};
 
+use crate::Engine::NodeType::AllNode;
 
 const WHITE_PAWN: [i32; 64] = [
     // Rank 1
@@ -138,8 +137,6 @@ const FLIP: [usize; 64] = [
 #[derive(Clone, Copy, PartialOrd, PartialEq, Debug)]
 struct TranspositionEntry {
     mov: Option<ChessMove>,
-    lower_bound: Option<i32>,
-    upper_bound: Option<i32>,
     score: Option<i32>,
     node_type: NodeType,
     depth: u16,
@@ -148,9 +145,9 @@ struct TranspositionEntry {
 
 #[derive(Clone, Copy, PartialOrd, PartialEq, Debug)]
 enum NodeType {
-    PV_NODE,
-    ALL_NODE,
-    CUT_NODE,
+    PVNode,
+    AllNode,
+    CutNode,
 }
 
 
@@ -159,6 +156,7 @@ pub struct Engine {
     pub cut_off_counter: i32,
     transposition_table: CacheTable<TranspositionEntry>,
     repeat_table: CacheTable<u16>,
+    pv_table: Vec<ChessMove>,
 }
 
 
@@ -180,7 +178,6 @@ const PIECE_VALUES: [i32; 6] = [
 ];
 
 pub fn evaluate(board: &Board) -> i32 {
-    let mut score = 0i32;
 
     let white_pieces = board.color_combined(White);
     let black_pieces = board.color_combined(Black);
@@ -211,7 +208,7 @@ pub fn evaluate(board: &Board) -> i32 {
     let black_rooks_count = black_rooks.popcnt() as i32;
     let black_queen_count = black_queen.popcnt() as i32;
 
-    score = (white_pawns_count - black_pawns_count) * PAWN_VALUE + (white_bishops_count - black_bishops_count) * BISHOP_VALUE +
+    let mut score = (white_pawns_count - black_pawns_count) * PAWN_VALUE + (white_bishops_count - black_bishops_count) * BISHOP_VALUE +
         (white_knights_count - black_knights_count) * KNIGHT_VALUE + (white_rooks_count - black_rooks_count) * ROOK_VALUE +
         (white_queen_count - black_queen_count) * QUEEN_VALUE;
 
@@ -229,8 +226,11 @@ pub fn evaluate(board: &Board) -> i32 {
     score += iterate_bitboard(&mut white_king, |square: Square| WHITE_KING[square.to_index()]);
     score += iterate_bitboard(&mut black_king, |square: Square| -WHITE_KING[FLIP[square.to_index()]]);
 
-
-    return score;
+    return if board.side_to_move() == White {
+        score
+    } else {
+        score * -1
+    };
 }
 
 #[inline]
@@ -248,60 +248,27 @@ impl Engine {
         return Engine {
             pos_counter: 0,
             cut_off_counter: 0,
-            transposition_table: CacheTable::new(33554432, TranspositionEntry { mov: None, lower_bound: None, upper_bound: None, score: None, node_type: ALL_NODE, depth: 0 }),
+            transposition_table: CacheTable::new(33554432, TranspositionEntry { mov: None, score: None, node_type: AllNode, depth: 0 }),
             repeat_table: CacheTable::new(33554432, 0u16),
+            pv_table: Vec::new(),
         };
     }
 
 
     pub fn iterative_deepening(&mut self, depth: u16, board: Board) -> (ChessMove, i32, Vec<ChessMove>) {
         let mut first_guess = 0;
-        let mut best_move = None;
-        let mut variation = Vec::new();
-
-        let maximize = if board.side_to_move() == White {
-            true
-        } else {
-            false
-        };
+        let mut best_move = ChessMove::default();
 
         for d in 1..depth + 1 {
-            (first_guess, best_move, variation) = self.mtdf(board, first_guess, depth, maximize);
-            //println!("{:?}", best_move);
+            (first_guess, best_move) = self.pvs(board,i32::MIN, i32::MAX, d);
+            self.repeat_table = CacheTable::new(33554432, 0u16);
         }
 
-        return (best_move.unwrap(), first_guess, variation);
+        return (best_move, first_guess, self.pv_table.clone());
     }
 
-    fn mtdf(&mut self, board: Board, f: i32, depth: u16, maximize: bool) -> (i32, Option<ChessMove>, Vec<ChessMove>) {
-        let mut score = f;
-        let mut mov = None;
-        let mut lower_bound = i32::MIN;
-        let mut upper_bound = i32::MAX;
-        let mut beta = 0;
-        let mut variation = Vec::new();
-        self.repeat_table =  CacheTable::new(33554432, 0u16);
 
-
-        while lower_bound < upper_bound {
-            if score == lower_bound {
-                beta = score + 100;
-            } else {
-                beta = score;
-            }
-
-            (score, mov, variation) = self.alpha_beta(depth, beta - 100, beta, maximize, board);
-            if score < beta {
-                upper_bound = score;
-            } else {
-                lower_bound = score;
-            }
-        }
-
-        return (score, mov, variation);
-    }
-
-    fn sort_moves(&mut self, board: &Board, move_gen: &mut MoveGen, cache_entry: Option<TranspositionEntry>) -> (Vec<ChessMove>) {
+    fn sort_moves(&mut self, board: &Board, move_gen: &mut MoveGen, pv_move: Option<ChessMove>) -> Vec<ChessMove> {
         let mut captures = Vec::new();
         let mut res_val = Vec::new();
         let color_captures = if board.side_to_move() == White {
@@ -310,9 +277,9 @@ impl Engine {
             White
         };
 
-        if cache_entry != None && cache_entry.unwrap().mov != None {
-            move_gen.remove_move(cache_entry.unwrap().mov.unwrap());
-            res_val.push(cache_entry.unwrap().mov.unwrap())
+        if pv_move != None {
+            move_gen.remove_move(pv_move.unwrap());
+            res_val.push(pv_move.unwrap());
         }
 
         move_gen.set_iterator_mask(*board.color_combined(color_captures));
@@ -339,129 +306,130 @@ impl Engine {
         return res_val;
     }
 
-    fn alpha_beta(&mut self, depth: u16, mut alpha: i32, mut beta: i32, maximize: bool, board: Board)
-        -> (i32, Option<ChessMove>, Vec<ChessMove>) {
-        let entry = self.transposition_table.get(board.get_hash());
-        self.pos_counter += 1;
-        if entry != None {
-            let actual_entry = entry.unwrap();
-            match actual_entry.lower_bound {
-                Some(score) => {
-                    if score >= beta {
-                        self.cut_off_counter += 1;
-                        return (score, actual_entry.mov, vec![]);
+
+
+    fn pvs(&mut self, board: Board, mut alpha: i32, mut beta: i32, depth: u16) -> (i32, ChessMove) {
+        if depth == 0 {
+            return (evaluate(&board), ChessMove::default());//(quiesce_search(alpha, beta ,&board), ChessMove::default());//quiesce_search(alpha, beta, &board);
+        }
+
+        let mut pvsearch = true;
+
+
+        // Check for checkmate
+        let mut legal_moves = MoveGen::new_legal(&board);
+        match legal_moves.len() {
+            0 => {
+                return if board.checkers().0 == 0 {
+                    (0, ChessMove::default())
+                } else {
+                    if board.side_to_move() == White {
+                        (-10_000_000, ChessMove::default())
                     } else {
-                        alpha = alpha.max(score);
+                        (10_000_000, ChessMove::default())
                     }
+                };
+            }
+            _ => {}
+        }
+
+        let r_table_entry = self.repeat_table.get(board.get_hash()).or(Some(0));
+
+        if r_table_entry == Some(2u16) {
+            let tmp = 10 * if board.side_to_move() == White {
+                -1
+            } else {
+                1
+            };
+            return (tmp, ChessMove::default());
+        }
+
+        self.repeat_table.add(board.get_hash(), r_table_entry.or(Some(0)).unwrap() + 1);
+
+
+        let entry = self.transposition_table.get(board.get_hash());
+        let mut pv_move = None;
+        if entry.is_some() && entry.unwrap().mov.is_some() {
+            pv_move = entry.unwrap().mov
+        }
+
+        //let moves = self.sort_moves(&board, &mut legal_moves, pv_move);
+        //let mut moves_iter = moves.iter();
+        let mut score = i32::MIN;
+        let mut b_mov = ChessMove::default();
+
+        for mov in legal_moves {
+            if pvsearch {
+                (score, _) = self.pvs(board.make_move_new(mov), beta.saturating_neg(), alpha.saturating_neg(), depth - 1);
+                score = score.saturating_neg();
+            } else {
+                score = self.zws(board.make_move_new(mov), alpha.saturating_neg(), depth - 1).saturating_neg();
+                if score > alpha {
+                    (score, _) = self.pvs(board.make_move_new(mov), beta.saturating_neg(), alpha.saturating_neg(), depth - 1);
+                    score = score.saturating_neg();
                 }
-                None => {}
             }
 
-            match actual_entry.upper_bound {
-                Some(score) => {
-                    if score <= alpha {
-                        self.cut_off_counter += 1;
-                        return (score, actual_entry.mov, vec![]);
-                    } else {
-                        beta = beta.min(score);
-                    }
-                }
-                None => {}
+            if score >= beta {
+                self.transposition_table.add(board.get_hash(),TranspositionEntry{
+                    mov: Some(mov),
+                    score: Some(beta),
+                    node_type: NodeType::CutNode,
+                    depth,
+                });
+                return (beta, mov); // fail-hard-beta
+            }
+            if score > alpha {
+                //println!("alpha before {alpha}");
+                alpha = score;
+                //println!("alpha after {alpha}");
+                pvsearch = false;
+                self.transposition_table.add(board.get_hash(),TranspositionEntry{
+                    mov: Some(mov),
+                    score: Some(beta),
+                    node_type: NodeType::PVNode,
+                    depth,
+                });
+                b_mov = mov;
             }
         }
 
-        let mut move_gen = MoveGen::new_legal(&board);
-        match move_gen.len() {
+        return (alpha, b_mov);
+    }
+
+    fn zws(&mut self, board: Board, mut beta: i32, depth: u16) -> i32 {
+        if depth == 0 {
+            return quiesce_search(beta -1, beta, &board);
+        }
+
+        // Check for checkmate
+        let mut legal_moves = MoveGen::new_legal(&board);
+        match legal_moves.len() {
             0 => {
                 return if board.checkers().0 == 0 {
-                    (0, None, vec![])
+                    0
                 } else {
                     if board.side_to_move() == White {
-                        //println!("{}", board.to_string());
-                        (-10_000_000, None, vec![])
+                        -10_000_000
                     } else {
-                        //println!("{}", board.to_string());
-                        (10_000_000, None, vec![])
+                        10_000_000
                     }
                 };
             }
             _ => {} // else do nothing
         }
 
-        let r_table_entry = self.repeat_table.get(board.get_hash()).or(Some(0));
+        let sorted_moves = self.sort_moves(&board, &mut legal_moves, None);
+        let mut score = i32::MIN;
 
-        if r_table_entry == Some(2u16) {
-            return (0, None, vec![]);
-        }
-
-        self.repeat_table.add(board.get_hash(), r_table_entry.or(Some(0)).unwrap() + 1);
-
-        let moves = self.sort_moves(&board, &mut move_gen, entry);
-        let mut moves_iter = moves.iter();
-
-
-        //println!("{:?}", entry);
-
-        if entry != None && entry.unwrap().node_type == PV_NODE {
-            println!("pv move {}", entry.unwrap().mov.unwrap());
-        }
-
-        if depth == 0 {
-            let score = evaluate(&board); //quiesce_search(alpha, beta, &board);
-            return (score, None, vec![]);
-        }
-
-
-        let mut score = 0;
-        let mut best_move: Option<ChessMove> = None;
-        let mut mov = moves_iter.next();
-        let mut mov_stack = Vec::new();
-
-
-        if maximize {
-            score = i32::MIN;
-            let mut a = alpha;
-            while (score < beta) && (mov != None) {
-                let (tmp_score, _, move_stack) = self.alpha_beta(depth - 1, a, beta, false, board.make_move_new(*mov.unwrap()));
-                if tmp_score > score {
-                    score = tmp_score;
-                    best_move = Some(*mov.unwrap());
-                    mov_stack = move_stack;
-                }
-                a = a.max(score);
-                mov = moves_iter.next();
-            }
-        } else {
-            score = i32::MAX;
-            let mut b = beta;
-            while (score > alpha) && (mov != None) {
-                let (tmp_score, _, move_stack) = self.alpha_beta(depth - 1, alpha, b, true, board.make_move_new(*mov.unwrap()));
-                if tmp_score < score {
-                    score = tmp_score;
-                    best_move = Some(*mov.unwrap());
-                    mov_stack = move_stack;
-                }
-                b = b.min(score);
-                mov = moves_iter.next();
+        for mov in sorted_moves {
+            score = self.zws(board.make_move_new(mov), 1-beta,depth-1);
+            if score >= beta {
+                return beta;
             }
         }
 
-        if score <= alpha {
-            self.cut_off_counter += 1;
-            self.transposition_table.add(board.get_hash(),
-                            TranspositionEntry { mov: best_move, lower_bound: None, upper_bound: Some(score), score: None, node_type: ALL_NODE, depth })
-        }
-        if score > alpha && score < beta {
-            self.transposition_table.add(board.get_hash(),
-                            TranspositionEntry { mov: best_move, lower_bound: Some(score), upper_bound: Some(score), score: Some(score), node_type: PV_NODE, depth })
-        }
-        if score >= beta {
-            self.cut_off_counter += 1;
-            self.transposition_table.add(board.get_hash(),
-                            TranspositionEntry { mov: best_move, lower_bound: Some(score), upper_bound: None, score: None, node_type: CUT_NODE, depth })
-        }
-        mov_stack.push(best_move.unwrap());
-        return (score, best_move, mov_stack);
+        return beta-1;
     }
 }
 
@@ -554,7 +522,7 @@ fn quiesce_search(mut alpha: i32, mut beta: i32, board: &Board) -> i32 {
     }
 
     for mov in c_moves {
-        score = -quiesce_search(beta, alpha, &board.make_move_new(mov));
+        score = quiesce_search(beta, alpha, &board.make_move_new(mov)).saturating_neg();
 
         if score >= beta {
             return beta;
@@ -563,7 +531,6 @@ fn quiesce_search(mut alpha: i32, mut beta: i32, board: &Board) -> i32 {
             alpha = score
         }
     }
-
 
     return alpha;
 }

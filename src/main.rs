@@ -1,10 +1,12 @@
 #![feature(iter_collect_into)]
 
-mod Engine;
-
-use std::io::{self, BufRead, Write};
-use chess::{Board};
+use std::io::{self, BufRead};
+use std::ops::Neg;
 use std::str::FromStr;
+
+use chess::Board;
+
+mod Engine;
 
 struct UciHandler {
     chess_board: Board,
@@ -82,7 +84,7 @@ impl UciHandler {
     fn handle_go_command(&self, parts: Vec<&str>) {
         let mut engine = Engine::Engine::new();
         let (bmove, score, mut variation) = engine
-            .iterative_deepening(16, self.chess_board.clone());
+            .iterative_deepening(5, self.chess_board.clone());
 
 
         variation.reverse();
@@ -105,15 +107,12 @@ impl UciHandler {
 fn main() {
     let mut uci_handler = UciHandler::new();
 
-    //uci_handler.run();
+    uci_handler.run();
 
     let mut engine = Engine::Engine::new();
 
+
     let (mov, score, mut variation) = engine.iterative_deepening(5, Board::default());
-    variation.reverse();
-    for mov in variation {
-        println!("{}", mov.to_string())
-    }
     println!("info {}", score);
     println!("bestmove {}", mov.to_string())
 }
