@@ -1,4 +1,4 @@
-use std::ops::{BitAnd, Neg};
+use std::ops::{BitAnd};
 
 use chess::{BitBoard, Board, CacheTable, ChessMove, Color, EMPTY, MoveGen, Piece, Square};
 use chess::Color::White;
@@ -178,7 +178,6 @@ const PIECE_VALUES: [i32; 6] = [
 ];
 
 pub fn evaluate(board: &Board) -> i32 {
-
     let white_pieces = board.color_combined(White);
     let black_pieces = board.color_combined(Black);
 
@@ -256,8 +255,8 @@ impl Engine {
 
 
     pub fn iterative_deepening(&mut self, depth: u16, board: Board) -> (ChessMove, i32, Vec<ChessMove>) {
-        let mut first_guess = 0;
-        let mut best_move = ChessMove::default();
+        let first_guess = 0;
+        let best_move = ChessMove::default();
 
         //for d in 1..depth + 1 {
         //    (first_guess, best_move) = self.pvs(board,i32::MIN, i32::MAX, d);
@@ -308,27 +307,22 @@ impl Engine {
     }
 
 
-
-    fn pvs(&mut self, board: Board, mut alpha: i32, mut beta: i32, depth: u16) -> (i32, ChessMove) {
+    fn pvs(&mut self, board: Board, mut alpha: i32, beta: i32, depth: u16) -> (i32, ChessMove) {
         if depth == 0 {
             return (evaluate(&board), ChessMove::default());//(quiesce_search(alpha, beta ,&board), ChessMove::default());//quiesce_search(alpha, beta, &board);
         }
 
-        let mut pvsearch = true;
 
+        let mut pvsearch = false;
 
         // Check for checkmate
-        let mut legal_moves = MoveGen::new_legal(&board);
+        let legal_moves = MoveGen::new_legal(&board);
         match legal_moves.len() {
             0 => {
                 return if board.checkers().0 == 0 {
                     (0, ChessMove::default())
                 } else {
-                    if board.side_to_move() == White {
-                        (-10_000_000, ChessMove::default())
-                    } else {
-                        (10_000_000, ChessMove::default())
-                    }
+                    (-10_000_000, ChessMove::default())
                 };
             }
             _ => {}
@@ -364,7 +358,8 @@ impl Engine {
                 (score, _) = self.pvs(board.make_move_new(mov), beta.saturating_neg(), alpha.saturating_neg(), depth - 1);
                 score = score.saturating_neg();
             } else {
-                score = self.zws(board.make_move_new(mov), alpha.saturating_neg(), depth - 1).saturating_neg();
+                (score, _) = self.pvs(board.make_move_new(mov), alpha.saturating_neg() - 1, alpha.saturating_neg(), depth - 1);
+                score = score.saturating_neg();
                 if score > alpha {
                     (score, _) = self.pvs(board.make_move_new(mov), beta.saturating_neg(), alpha.saturating_neg(), depth - 1);
                     score = score.saturating_neg();
@@ -372,7 +367,7 @@ impl Engine {
             }
 
             if score >= beta {
-                self.transposition_table.add(board.get_hash(),TranspositionEntry{
+                self.transposition_table.add(board.get_hash(), TranspositionEntry {
                     mov: Some(mov),
                     score: Some(beta),
                     node_type: NodeType::CutNode,
@@ -380,10 +375,11 @@ impl Engine {
                 });
                 return (beta, mov); // fail-hard-beta
             }
+
             if score > alpha {
                 alpha = score;
                 pvsearch = false;
-                self.transposition_table.add(board.get_hash(),TranspositionEntry{
+                self.transposition_table.add(board.get_hash(), TranspositionEntry {
                     mov: Some(mov),
                     score: Some(beta),
                     node_type: NodeType::PVNode,
@@ -396,39 +392,35 @@ impl Engine {
         return (alpha, b_mov);
     }
 
-    fn zws(&mut self, board: Board, mut beta: i32, depth: u16) -> i32 {
+    fn zws(&mut self, board: Board, beta: i32, depth: u16) -> i32 {
         if depth == 0 {
             return evaluate(&board);//quiesce_search(beta -1, beta, &board);
         }
 
         // Check for checkmate
-        let mut legal_moves = MoveGen::new_legal(&board);
+        let legal_moves = MoveGen::new_legal(&board);
         match legal_moves.len() {
             0 => {
                 return if board.checkers().0 == 0 {
                     0
                 } else {
-                    if board.side_to_move() == White {
-                        -10_000_000
-                    } else {
-                        10_000_000
-                    }
+                    -10_000_000
                 };
             }
             _ => {} // else do nothing
         }
 
-        let sorted_moves = self.sort_moves(&board, &mut legal_moves, None);
-        let mut score = i32::MIN;
+        //let sorted_moves = self.sort_moves(&board, &mut legal_moves, None);
 
-        for mov in sorted_moves {
-            score = self.zws(board.make_move_new(mov), 1-beta,depth-1);
+        for mov in legal_moves {
+            let score = self.zws(board.make_move_new(mov), 1 - beta, depth - 1).saturating_neg();
+            //println!("{score}");
             if score >= beta {
                 return beta;
             }
         }
 
-        return beta-1;
+        return beta - 1;
     }
 }
 
@@ -504,7 +496,7 @@ fn get_capture_moves(board: &Board) -> Vec<ChessMove> {
 }
 
 
-fn quiesce_search(mut alpha: i32, mut beta: i32, board: &Board) -> i32 {
+fn quiesce_search(mut alpha: i32, beta: i32, board: &Board) -> i32 {
     let standing_pat = evaluate(board);
     if standing_pat >= beta {
         return beta;

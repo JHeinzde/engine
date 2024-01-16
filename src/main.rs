@@ -1,7 +1,7 @@
 #![feature(iter_collect_into)]
 
 use std::io::{self, BufRead};
-use std::ops::Neg;
+
 use std::str::FromStr;
 
 use chess::Board;
@@ -81,7 +81,7 @@ impl UciHandler {
     }
 
     // Example method to handle the "go" command
-    fn handle_go_command(&self, parts: Vec<&str>) {
+    fn handle_go_command(&self, _parts: Vec<&str>) {
         let mut engine = Engine::Engine::new();
         let (bmove, score, mut variation) = engine
             .iterative_deepening(5, self.chess_board.clone());
@@ -105,14 +105,14 @@ impl UciHandler {
 }
 
 fn main() {
-    let mut uci_handler = UciHandler::new();
+    let _uci_handler = UciHandler::new();
 
     //uci_handler.run();
 
     let mut engine = Engine::Engine::new();
 
 
-    let (mov, score, mut variation) = engine.iterative_deepening(6, Board::from_str("3qr2k/pbpp2pp/1p5N/3Q2b1/2P1P3/P7/1PP2PPP/R4RK1 w - - 0 1").unwrap());
+    let (mov, score, _variation) = engine.iterative_deepening(6, Board::from_str("3qr2k/pbpp2pp/1p5N/3Q2b1/2P1P3/P7/1PP2PPP/R4RK1 w - - 0 1").unwrap());
     println!("info {}", score);
     println!("bestmove {}", mov.to_string())
 }
