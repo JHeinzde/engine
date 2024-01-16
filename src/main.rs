@@ -3,20 +3,30 @@
 use std::io::{self, BufRead};
 
 use std::str::FromStr;
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 
-use chess::Board;
+use chess::{Board, ChessMove};
+use chess::Color::White;
 
 mod Engine;
 
 struct UciHandler {
     chess_board: Board,
+    time_white: f64,
+    time_black: f64,
+    moves_made: u16,
 }
 
 impl UciHandler {
     fn new() -> Self {
         // Initialize your UCI handler here
         UciHandler {
-            chess_board: Board::default()
+            chess_board: Board::default(),
+            time_white: 0.0,
+            time_black: 0.0,
+            moves_made: 0,
         }
     }
 
@@ -71,48 +81,98 @@ impl UciHandler {
         }
 
         if parts.contains(&"moves") {
+            self.moves_made = 0;
             let pos_moves = parts.iter().position(|&s| s == "moves").unwrap();
             for i in pos_moves + 1..parts.len() {
                 let uci_move = *parts.get(i).unwrap();
+
                 let parsed_move = chess::ChessMove::from_str(uci_move).unwrap();
                 self.chess_board = self.chess_board.make_move_new(parsed_move);
+                self.moves_made += 1;
             }
         }
     }
 
     // Example method to handle the "go" command
-    fn handle_go_command(&self, _parts: Vec<&str>) {
-        let mut engine = Engine::Engine::new();
-        let (bmove, score, mut variation) = engine
-            .iterative_deepening(5, self.chess_board.clone());
-
-
-        variation.reverse();
-        let mut s_var = String::new();
-
-        for mov in variation {
-            s_var.push_str(&*mov.to_string());
-            s_var.push_str(" ")
+    fn handle_go_command(&mut self, parts: Vec<&str>) {
+        if parts.contains(&"btime") {
+            let pos_btime = parts.iter().position(|&s| s == "btime").unwrap();
+            let time = *parts.get(pos_btime + 1).unwrap();
+            self.time_black = time.parse().unwrap();
         }
+
+        if parts.contains(&"wtime") {
+            let pos_wtime = parts.iter().position(|&s| s == "wtime").unwrap();
+            let time = *parts.get(pos_wtime + 1).unwrap();
+            self.time_white = time.parse().unwrap();
+        }
+
+        let mut engine = Engine::Engine::new();
+        let mut time_slice = 10.0;
+
+        //if self.chess_board.side_to_move() == White {
+        //    if self.moves_made != 60 {
+        //        time_slice = self.time_white / 60 - self.moves_made;
+        //    } else {
+        //        time_slice = self.time_white / 150 - self.moves_made;
+        //    }
+        //} else {
+        //    if self.moves_made != 60 {
+        //        time_slice = self.time_black / 60 - self.moves_made;
+        //    } else {
+        //        time_slice = self.time_black / 150 - self.moves_made;
+        //    }
+        //}
+//
+        let (tx, rx) = mpsc::channel();
+        let (tx_cancle, rx_cancle) = mpsc::channel();
+        let board  = self.chess_board.clone();
+        let _ = thread::spawn(move || {
+            engine.iterative_deepening(board, tx, rx_cancle);
+        });
+
+        let mut score = 0;
+        let mut best_move = ChessMove::default();
+
+
+        while time_slice > 0.0 {
+            let inst_now = Instant::now();
+            let res = rx.recv_timeout(Duration::from_secs_f64(time_slice));
+            if res.is_ok() {
+                (score, best_move) = res.unwrap();
+            }
+
+            let inst_after = Instant::now();
+
+            let duration = inst_after.duration_since(inst_now).as_secs_f64();
+            println!("info {duration}");
+            time_slice = time_slice - duration;
+        }
+
+        let _ = tx_cancle.send(()); // cancle search
 
 
         println!("info score {}", score);
-        println!("info variation {}", s_var);
-        println!("info visited nodes {}", engine.pos_counter);
-        println!("info pruning operations {}", engine.cut_off_counter);
-        println!("bestmove {}", bmove.to_string())
+        //println!("info visited nodes {}", engine.pos_counter);
+        //println!("info pruning operations {}", engine.cut_off_counter);
+        println!("bestmove {}", best_move.to_string())
     }
 }
 
 fn main() {
-    let _uci_handler = UciHandler::new();
+    let mut uci_handler = UciHandler::new();
 
-    //uci_handler.run();
+    uci_handler.run();
 
-    let mut engine = Engine::Engine::new();
-
-
-    let (mov, score, _variation) = engine.iterative_deepening(6, Board::from_str("3qr2k/pbpp2pp/1p5N/3Q2b1/2P1P3/P7/1PP2PPP/R4RK1 w - - 0 1").unwrap());
-    println!("info {}", score);
-    println!("bestmove {}", mov.to_string())
+    //let mut engine = Engine::Engine::new();
+//
+//
+    //let (mov, score, variation) = engine.iterative_deepening(6, Board::default());
+//
+    //for mov in variation {
+    //    println!("{mov}");
+    //}
+//
+    //println!("info {}", score);
+    //println!("bestmove {}", mov.to_string())
 }

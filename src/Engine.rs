@@ -1,4 +1,5 @@
 use std::ops::{BitAnd};
+use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 
 use chess::{BitBoard, Board, CacheTable, ChessMove, Color, EMPTY, MoveGen, Piece, Square};
 use chess::Color::White;
@@ -156,7 +157,7 @@ pub struct Engine {
     pub cut_off_counter: i32,
     transposition_table: CacheTable<TranspositionEntry>,
     repeat_table: CacheTable<u16>,
-    pv_table: Vec<ChessMove>,
+    pv_table: [ChessMove; 100],
 }
 
 
@@ -249,22 +250,36 @@ impl Engine {
             cut_off_counter: 0,
             transposition_table: CacheTable::new(33554432, TranspositionEntry { mov: None, score: None, node_type: AllNode, depth: 0 }),
             repeat_table: CacheTable::new(33554432, 0u16),
-            pv_table: Vec::new(),
+            pv_table: [ChessMove::default(); 100],
         };
     }
 
 
-    pub fn iterative_deepening(&mut self, depth: u16, board: Board) -> (ChessMove, i32, Vec<ChessMove>) {
-        let first_guess = 0;
-        let best_move = ChessMove::default();
+    pub fn iterative_deepening(&mut self,  board: Board, tx: Sender<(i32, ChessMove)>, rx: Receiver<()>) {
+        let mut first_guess = 0;
+        let mut best_move = ChessMove::default();
 
-        //for d in 1..depth + 1 {
-        //    (first_guess, best_move) = self.pvs(board,i32::MIN, i32::MAX, d);
-        //    self.repeat_table = CacheTable::new(33554432, 0u16);
-        //}
-        self.pvs(board, i32::MIN, i32::MAX, depth);
+        for d in 1..100 {
+            (first_guess, best_move) = self.pvs(board, i32::MIN, i32::MAX, d);
+            tx.send((first_guess, best_move));
+            self.repeat_table = CacheTable::new(33554432, 0u16);
+            match rx.try_recv() {
+                Ok(_) | Err(TryRecvError::Disconnected) => {
+                    break;
+                }
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+        //(first_guess, best_move) = self.pvs(board, i32::MIN, i32::MAX, depth);
 
-        return (best_move, first_guess, self.pv_table.clone());
+
+        let mut pv = Vec::new();
+        for i in 0..100 {
+            if self.pv_table[i] == ChessMove::default() {
+                break;
+            }
+            pv.push(self.pv_table[i]);
+        }
     }
 
 
@@ -309,14 +324,14 @@ impl Engine {
 
     fn pvs(&mut self, board: Board, mut alpha: i32, beta: i32, depth: u16) -> (i32, ChessMove) {
         if depth == 0 {
-            return (evaluate(&board), ChessMove::default());//(quiesce_search(alpha, beta ,&board), ChessMove::default());//quiesce_search(alpha, beta, &board);
+            return (self.quiesce_search(alpha, beta, &board), ChessMove::default());
         }
 
 
         let mut pvsearch = false;
 
         // Check for checkmate
-        let legal_moves = MoveGen::new_legal(&board);
+        let mut legal_moves = MoveGen::new_legal(&board);
         match legal_moves.len() {
             0 => {
                 return if board.checkers().0 == 0 {
@@ -327,7 +342,6 @@ impl Engine {
             }
             _ => {}
         }
-
         //let r_table_entry = self.repeat_table.get(board.get_hash()).or(Some(0));
 //
         //if r_table_entry == Some(2u16) {
@@ -348,44 +362,50 @@ impl Engine {
             pv_move = entry.unwrap().mov
         }
 
-        //let moves = self.sort_moves(&board, &mut legal_moves, pv_move);
-        //let mut moves_iter = moves.iter();
+        let moves = self.sort_moves(&board, &mut legal_moves, pv_move);
+        let mut moves_iter = moves.iter();
         let mut score = i32::MIN;
         let mut b_mov = ChessMove::default();
 
-        for mov in legal_moves {
+        for mov in moves_iter {
+            self.pos_counter += 1;
             if pvsearch {
-                (score, _) = self.pvs(board.make_move_new(mov), beta.saturating_neg(), alpha.saturating_neg(), depth - 1);
+                (score, _) = self.pvs(board.make_move_new(*mov), beta.saturating_neg(), alpha.saturating_neg(), depth - 1);
                 score = score.saturating_neg();
             } else {
-                (score, _) = self.pvs(board.make_move_new(mov), alpha.saturating_neg() - 1, alpha.saturating_neg(), depth - 1);
+                (score) = self.zws(board.make_move_new(*mov), alpha.saturating_neg(), depth - 1);
                 score = score.saturating_neg();
                 if score > alpha {
-                    (score, _) = self.pvs(board.make_move_new(mov), beta.saturating_neg(), alpha.saturating_neg(), depth - 1);
+                    (score, _) = self.pvs(board.make_move_new(*mov), beta.saturating_neg(), alpha.saturating_neg(), depth - 1);
                     score = score.saturating_neg();
                 }
             }
 
+            //if depth == 5 {
+            //    println!("beginning");
+            //}
+
             if score >= beta {
                 self.transposition_table.add(board.get_hash(), TranspositionEntry {
-                    mov: Some(mov),
+                    mov: Some(*mov),
                     score: Some(beta),
                     node_type: NodeType::CutNode,
                     depth,
                 });
-                return (beta, mov); // fail-hard-beta
+                return (beta, *mov); // fail-hard-beta
             }
 
             if score > alpha {
                 alpha = score;
                 pvsearch = false;
                 self.transposition_table.add(board.get_hash(), TranspositionEntry {
-                    mov: Some(mov),
+                    mov: Some(*mov),
                     score: Some(beta),
                     node_type: NodeType::PVNode,
                     depth,
                 });
-                b_mov = mov;
+                self.pv_table[(depth - 1) as usize] = *mov;
+                b_mov = *mov;
             }
         }
 
@@ -394,11 +414,11 @@ impl Engine {
 
     fn zws(&mut self, board: Board, beta: i32, depth: u16) -> i32 {
         if depth == 0 {
-            return evaluate(&board);//quiesce_search(beta -1, beta, &board);
+            return self.quiesce_search(beta - 1, beta, &board);
         }
 
         // Check for checkmate
-        let legal_moves = MoveGen::new_legal(&board);
+        let mut legal_moves = MoveGen::new_legal(&board);
         match legal_moves.len() {
             0 => {
                 return if board.checkers().0 == 0 {
@@ -410,17 +430,47 @@ impl Engine {
             _ => {} // else do nothing
         }
 
-        //let sorted_moves = self.sort_moves(&board, &mut legal_moves, None);
+        let sorted_moves = self.sort_moves(&board, &mut legal_moves, None);
 
         for mov in legal_moves {
             let score = self.zws(board.make_move_new(mov), 1 - beta, depth - 1).saturating_neg();
-            //println!("{score}");
             if score >= beta {
                 return beta;
             }
         }
 
         return beta - 1;
+    }
+
+    fn quiesce_search(&mut self, mut alpha: i32, beta: i32, board: &Board) -> i32 {
+        let standing_pat = evaluate(board);
+        if standing_pat >= beta {
+            return beta;
+        }
+        if alpha < standing_pat {
+            alpha = standing_pat;
+        }
+
+        let c_moves = get_capture_moves(board);
+        let mut score = 0;
+
+        if c_moves.len() == 0 {
+            return standing_pat;
+        }
+
+        for mov in c_moves {
+            self.pos_counter += 1;
+            score = self.quiesce_search(beta.saturating_neg(), alpha.saturating_neg(), &board.make_move_new(mov)).saturating_neg();
+
+            if score >= beta {
+                return beta;
+            }
+            if score < alpha {
+                alpha = score
+            }
+        }
+
+        return alpha;
     }
 }
 
@@ -496,32 +546,3 @@ fn get_capture_moves(board: &Board) -> Vec<ChessMove> {
 }
 
 
-fn quiesce_search(mut alpha: i32, beta: i32, board: &Board) -> i32 {
-    let standing_pat = evaluate(board);
-    if standing_pat >= beta {
-        return beta;
-    }
-    if alpha < standing_pat {
-        alpha = standing_pat;
-    }
-
-    let c_moves = get_capture_moves(board);
-    let mut score = 0;
-
-    if c_moves.len() == 0 {
-        return standing_pat;
-    }
-
-    for mov in c_moves {
-        score = quiesce_search(beta, alpha, &board.make_move_new(mov)).saturating_neg();
-
-        if score >= beta {
-            return beta;
-        }
-        if score < alpha {
-            alpha = score
-        }
-    }
-
-    return alpha;
-}
