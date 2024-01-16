@@ -153,8 +153,8 @@ enum NodeType {
 
 
 pub struct Engine {
-    pub pos_counter: i32,
-    pub cut_off_counter: i32,
+    pub pos_counter: u32,
+    pub cut_off_counter: u32,
     transposition_table: CacheTable<TranspositionEntry>,
     repeat_table: CacheTable<u16>,
     pv_table: [ChessMove; 100],
@@ -255,13 +255,13 @@ impl Engine {
     }
 
 
-    pub fn iterative_deepening(&mut self,  board: Board, tx: Sender<(i32, ChessMove)>, rx: Receiver<()>) {
+    pub fn iterative_deepening(&mut self,  board: Board, tx: Sender<(i32, ChessMove, u16, u32)>, rx: Receiver<()>) {
         let mut first_guess = 0;
         let mut best_move = ChessMove::default();
 
         for d in 1..100 {
             (first_guess, best_move) = self.pvs(board, i32::MIN, i32::MAX, d);
-            tx.send((first_guess, best_move));
+            tx.send((first_guess, best_move, d, self.pos_counter));
             self.repeat_table = CacheTable::new(33554432, 0u16);
             match rx.try_recv() {
                 Ok(_) | Err(TryRecvError::Disconnected) => {

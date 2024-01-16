@@ -133,28 +133,27 @@ impl UciHandler {
 
         let mut score = 0;
         let mut best_move = ChessMove::default();
+        let mut nodes = 0u32;
+        let mut depth = 0u16;
 
 
         while time_slice > 0.0 {
             let inst_now = Instant::now();
             let res = rx.recv_timeout(Duration::from_secs_f64(time_slice));
             if res.is_ok() {
-                (score, best_move) = res.unwrap();
+                (score, best_move, depth, nodes) = res.unwrap();
             }
 
             let inst_after = Instant::now();
 
             let duration = inst_after.duration_since(inst_now).as_secs_f64();
-            println!("info {duration}");
             time_slice = time_slice - duration;
         }
 
         let _ = tx_cancle.send(()); // cancle search
 
 
-        println!("info score {}", score);
-        //println!("info visited nodes {}", engine.pos_counter);
-        //println!("info pruning operations {}", engine.cut_off_counter);
+        println!("info score {} nodes {nodes} depth {depth}", score);
         println!("bestmove {}", best_move.to_string())
     }
 }
