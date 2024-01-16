@@ -107,12 +107,12 @@ impl UciHandler {
 fn main() {
     let mut uci_handler = UciHandler::new();
 
-    uci_handler.run();
+    //uci_handler.run();
 
     let mut engine = Engine::Engine::new();
 
 
-    let (mov, score, mut variation) = engine.iterative_deepening(5, Board::default());
+    let (mov, score, mut variation) = engine.iterative_deepening(6, Board::from_str("3qr2k/pbpp2pp/1p5N/3Q2b1/2P1P3/P7/1PP2PPP/R4RK1 w - - 0 1").unwrap());
     println!("info {}", score);
     println!("bestmove {}", mov.to_string())
 }

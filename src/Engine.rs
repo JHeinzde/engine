@@ -259,10 +259,11 @@ impl Engine {
         let mut first_guess = 0;
         let mut best_move = ChessMove::default();
 
-        for d in 1..depth + 1 {
-            (first_guess, best_move) = self.pvs(board,i32::MIN, i32::MAX, d);
-            self.repeat_table = CacheTable::new(33554432, 0u16);
-        }
+        //for d in 1..depth + 1 {
+        //    (first_guess, best_move) = self.pvs(board,i32::MIN, i32::MAX, d);
+        //    self.repeat_table = CacheTable::new(33554432, 0u16);
+        //}
+        self.pvs(board, i32::MIN, i32::MAX, depth);
 
         return (best_move, first_guess, self.pv_table.clone());
     }
@@ -333,18 +334,18 @@ impl Engine {
             _ => {}
         }
 
-        let r_table_entry = self.repeat_table.get(board.get_hash()).or(Some(0));
-
-        if r_table_entry == Some(2u16) {
-            let tmp = 10 * if board.side_to_move() == White {
-                -1
-            } else {
-                1
-            };
-            return (tmp, ChessMove::default());
-        }
-
-        self.repeat_table.add(board.get_hash(), r_table_entry.or(Some(0)).unwrap() + 1);
+        //let r_table_entry = self.repeat_table.get(board.get_hash()).or(Some(0));
+//
+        //if r_table_entry == Some(2u16) {
+        //    let tmp = 10 * if board.side_to_move() == White {
+        //        -1
+        //    } else {
+        //        1
+        //    };
+        //    return (tmp, ChessMove::default());
+        //}
+//
+        //self.repeat_table.add(board.get_hash(), r_table_entry.or(Some(0)).unwrap() + 1);
 
 
         let entry = self.transposition_table.get(board.get_hash());
@@ -380,9 +381,7 @@ impl Engine {
                 return (beta, mov); // fail-hard-beta
             }
             if score > alpha {
-                //println!("alpha before {alpha}");
                 alpha = score;
-                //println!("alpha after {alpha}");
                 pvsearch = false;
                 self.transposition_table.add(board.get_hash(),TranspositionEntry{
                     mov: Some(mov),
@@ -399,7 +398,7 @@ impl Engine {
 
     fn zws(&mut self, board: Board, mut beta: i32, depth: u16) -> i32 {
         if depth == 0 {
-            return quiesce_search(beta -1, beta, &board);
+            return evaluate(&board);//quiesce_search(beta -1, beta, &board);
         }
 
         // Check for checkmate
