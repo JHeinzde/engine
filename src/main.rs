@@ -17,6 +17,7 @@ struct UciHandler {
     time_white: f64,
     time_black: f64,
     moves_made: u16,
+    time_force: f64,
 }
 
 impl UciHandler {
@@ -27,6 +28,7 @@ impl UciHandler {
             time_white: 0.0,
             time_black: 0.0,
             moves_made: 0,
+            time_force: 0.0
         }
     }
 
@@ -99,31 +101,41 @@ impl UciHandler {
             let pos_btime = parts.iter().position(|&s| s == "btime").unwrap();
             let time = *parts.get(pos_btime + 1).unwrap();
             self.time_black = time.parse().unwrap();
+            self.time_black /= 1000.0;
         }
 
         if parts.contains(&"wtime") {
             let pos_wtime = parts.iter().position(|&s| s == "wtime").unwrap();
             let time = *parts.get(pos_wtime + 1).unwrap();
             self.time_white = time.parse().unwrap();
+            self.time_white /= 1000.0;
+        }
+
+        if parts.contains(&"movetime") {
+            let pos_movtime = parts.iter().position(|&s| s == "movetime").unwrap();
+            let time = *parts.get(pos_movtime + 1).unwrap();
+            self.time_force = time.parse().unwrap();
         }
 
         let mut engine = Engine::Engine::new();
         let mut time_slice = 10.0;
 
-        //if self.chess_board.side_to_move() == White {
-        //    if self.moves_made != 60 {
-        //        time_slice = self.time_white / 60 - self.moves_made;
-        //    } else {
-        //        time_slice = self.time_white / 150 - self.moves_made;
-        //    }
-        //} else {
-        //    if self.moves_made != 60 {
-        //        time_slice = self.time_black / 60 - self.moves_made;
-        //    } else {
-        //        time_slice = self.time_black / 150 - self.moves_made;
-        //    }
-        //}
-//
+        if self.chess_board.side_to_move() == White && self.time_white != 0.0 {
+            if self.moves_made != 60 {
+                time_slice = self.time_white / (60 - self.moves_made) as f64;
+            } else {
+                time_slice = self.time_white / (150 - self.moves_made) as f64;
+            }
+        } else if self.time_black != 0.0 {
+            if self.moves_made != 60 {
+                time_slice = self.time_black / (60 - self.moves_made) as f64;
+            } else {
+                time_slice = self.time_black / (150 - self.moves_made) as f64;
+            }
+        } else if self.time_force != 0.0 {
+            time_slice = self.time_force / 1000.0
+        }
+
         let (tx, rx) = mpsc::channel();
         let (tx_cancle, rx_cancle) = mpsc::channel();
         let board  = self.chess_board.clone();
@@ -135,6 +147,8 @@ impl UciHandler {
         let mut best_move = ChessMove::default();
         let mut nodes = 0u32;
         let mut depth = 0u16;
+
+        println!("info timeslice {time_slice}");
 
 
         while time_slice > 0.0 {
@@ -150,7 +164,7 @@ impl UciHandler {
             time_slice = time_slice - duration;
         }
 
-        let _ = tx_cancle.send(()); // cancle search
+        let _ = tx_cancle.send(()); // cancel search
 
 
         println!("info score {} nodes {nodes} depth {depth}", score);

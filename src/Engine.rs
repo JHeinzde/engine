@@ -328,7 +328,7 @@ impl Engine {
         }
 
 
-        let mut pvsearch = false;
+        let mut pvsearch = true;
 
         // Check for checkmate
         let mut legal_moves = MoveGen::new_legal(&board);
